@@ -21,6 +21,7 @@ import { AdminCategoriesPage } from './pages/AdminCategoriesPage';
 import { LoginPage } from './pages/LoginPage';
 import { SignupPage } from './pages/SignupPage';
 import { AccountPage } from './pages/AccountPage';
+import { DiagnosticPage } from './pages/DiagnosticPage';
 
 function App() {
   const { route, navigate } = useRouter();
@@ -96,6 +97,10 @@ function App() {
 
     if (route === '/account') {
       return <AccountPage onNavigate={navigate} />;
+    }
+
+    if (route === '/diagnostic') {
+      return <DiagnosticPage />;
     }
 
     return <HomePage onNavigate={navigate} />;
