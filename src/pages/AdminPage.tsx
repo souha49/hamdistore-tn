@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, Edit, Trash2, Package, ShoppingBag, Upload, X, Settings } from 'lucide-react';
+import { Plus, CreditCard as Edit, Trash2, Package, ShoppingBag, Upload, X, Settings } from 'lucide-react';
 import { api } from '../lib/api';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
@@ -7,20 +7,22 @@ import type { Product, Category, Order, OrderItem } from '../lib/database.types'
 import { AdminSettingsPage } from './AdminSettingsPage';
 
 export function AdminPage() {
-  const { loading: authLoading } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [activeTab, setActiveTab] = useState<'products' | 'orders' | 'settings'>('products');
   const [products, setProducts] = useState<Product[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [orderItems, setOrderItems] = useState<Record<string, OrderItem[]>>({});
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [checkingAdmin, setCheckingAdmin] = useState(true);
   const [showProductForm, setShowProductForm] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [formData, setFormData] = useState({
     name: '',
     description: '',
     price: '',
-    category_id: '',
+    category_ids: [] as string[],
     images: '',
     sizes: '36,37,38,39,40,41,42,43,44,45',
     stock_per_size: '10',
@@ -30,8 +32,32 @@ export function AdminPage() {
   const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
-    loadData();
-  }, []);
+    checkAdminAccess();
+  }, [user]);
+
+  useEffect(() => {
+    if (isAdmin) {
+      loadData();
+    }
+  }, [isAdmin]);
+
+  const checkAdminAccess = async () => {
+    if (!user?.email) {
+      setCheckingAdmin(false);
+      setIsAdmin(false);
+      return;
+    }
+
+    try {
+      const adminStatus = await api.adminUsers.isAdmin(user.email);
+      setIsAdmin(adminStatus);
+    } catch (error) {
+      console.error('Error checking admin access:', error);
+      setIsAdmin(false);
+    } finally {
+      setCheckingAdmin(false);
+    }
+  };
 
   const loadData = async () => {
     try {
@@ -115,7 +141,7 @@ export function AdminPage() {
       name: formData.name,
       description: formData.description,
       price: parseFloat(formData.price),
-      category_id: formData.category_id || null,
+      category_id: formData.category_ids.length > 0 ? formData.category_ids[0] : null,
       images,
       sizes,
       stock_quantity: sizes.reduce((sum, s) => sum + s.stock, 0),
@@ -123,10 +149,29 @@ export function AdminPage() {
     };
 
     try {
+      let productId = editingProduct?.id;
+
       if (editingProduct) {
         await api.products.update(editingProduct.id, productData);
+        await supabase
+          .from('product_categories')
+          .delete()
+          .eq('product_id', editingProduct.id);
       } else {
-        await api.products.create(productData);
+        const newProduct = await api.products.create(productData);
+        productId = newProduct.id;
+      }
+
+      if (productId && formData.category_ids.length > 0) {
+        const categoryRelations = formData.category_ids.map((categoryId, index) => ({
+          product_id: productId,
+          category_id: categoryId,
+          is_primary: index === 0
+        }));
+
+        await supabase
+          .from('product_categories')
+          .insert(categoryRelations);
       }
 
       setShowProductForm(false);
@@ -139,14 +184,20 @@ export function AdminPage() {
     }
   };
 
-  const handleEditProduct = (product: Product) => {
+  const handleEditProduct = async (product: Product) => {
     setEditingProduct(product);
     const imageList = Array.isArray(product.images) ? product.images : [];
+
+    const { data: productCategories } = await supabase
+      .from('product_categories')
+      .select('category_id')
+      .eq('product_id', product.id);
+
     setFormData({
       name: product.name,
       description: product.description,
       price: product.price.toString(),
-      category_id: product.category_id || '',
+      category_ids: productCategories?.map(pc => pc.category_id) || [],
       images: imageList.join('\n'),
       sizes: product.sizes.map((s: { size: string }) => s.size).join(','),
       stock_per_size: product.sizes[0]?.stock.toString() || '0',
@@ -183,7 +234,7 @@ export function AdminPage() {
       name: '',
       description: '',
       price: '',
-      category_id: '',
+      category_ids: [],
       images: '',
       sizes: '36,37,38,39,40,41,42,43,44,45',
       stock_per_size: '10',
@@ -192,7 +243,43 @@ export function AdminPage() {
     setUploadedImages([]);
   };
 
-  if (authLoading || loading) {
+  if (authLoading || checkingAdmin) {
+    return (
+      <div className="min-h-screen bg-white flex items-center justify-center">
+        <div className="inline-block h-12 w-12 animate-spin rounded-full border-4 border-gray-200 border-t-gray-900"></div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="max-w-md w-full bg-white rounded-lg shadow-lg p-8 text-center">
+          <h2 className="text-2xl font-bold text-gray-900 mb-4">Accès Administrateur</h2>
+          <p className="text-gray-600 mb-6">Vous devez être connecté pour accéder à cette page.</p>
+          <a href="/login" className="inline-block px-6 py-3 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors">
+            Se connecter
+          </a>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAdmin) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="max-w-md w-full bg-white rounded-lg shadow-lg p-8 text-center">
+          <h2 className="text-2xl font-bold text-gray-900 mb-4">Accès Refusé</h2>
+          <p className="text-gray-600 mb-6">Vous n'avez pas l'autorisation d'accéder à cette page.</p>
+          <a href="/" className="inline-block px-6 py-3 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors">
+            Retour à l'accueil
+          </a>
+        </div>
+      </div>
+    );
+  }
+
+  if (loading) {
     return (
       <div className="min-h-screen bg-white flex items-center justify-center">
         <div className="inline-block h-12 w-12 animate-spin rounded-full border-4 border-gray-200 border-t-gray-900"></div>
@@ -300,21 +387,40 @@ export function AdminPage() {
                         </div>
 
                         <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-2">
-                            Catégorie
+                          <label className="block text-sm font-medium text-gray-700 mb-3">
+                            Catégories
                           </label>
-                          <select
-                            value={formData.category_id}
-                            onChange={(e) => setFormData({ ...formData, category_id: e.target.value })}
-                            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-900"
-                          >
-                            <option value="">Sélectionner une catégorie</option>
-                            {categories.map((cat) => (
-                              <option key={cat.id} value={cat.id}>
-                                {cat.name}
-                              </option>
+                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                            {categories.map(category => (
+                              <label
+                                key={category.id}
+                                className="flex items-center gap-2 p-3 border border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50 transition-colors"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={formData.category_ids.includes(category.id)}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setFormData({
+                                        ...formData,
+                                        category_ids: [...formData.category_ids, category.id]
+                                      });
+                                    } else {
+                                      setFormData({
+                                        ...formData,
+                                        category_ids: formData.category_ids.filter(id => id !== category.id)
+                                      });
+                                    }
+                                  }}
+                                  className="w-4 h-4 text-gray-900 border-gray-300 rounded focus:ring-gray-900"
+                                />
+                                <span className="text-sm text-gray-700">{category.name}</span>
+                              </label>
                             ))}
-                          </select>
+                          </div>
+                          {formData.category_ids.length === 0 && (
+                            <p className="mt-2 text-sm text-gray-500">Sélectionnez au moins une catégorie</p>
+                          )}
                         </div>
 
                         <div>
